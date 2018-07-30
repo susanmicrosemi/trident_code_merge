@@ -334,31 +334,50 @@ unsigned long switch_convertu8tou32(UINT8 *p, int size)
 int switchtec_fw_file_info(int fd, struct switchtec_fw_image_info *info)
 {
 	int ret;
-	struct fw_image_header hdr = {};
-
-	ret = read(fd, &hdr, sizeof(hdr));
-	lseek(fd, 0, SEEK_SET);
-
-	if (ret != sizeof(hdr))
-		goto invalid_file;
-
-	if (strcmp(hdr.magic, "PMC") != 0)
-		goto invalid_file;
-
+	struct fwdl_file_hdr_struct tri_hdr;
+    	UINT8  tri_vend[5] = {"MSCC"};
+    	UINT8 file_tri;
+    	UINT32 ver_num;
 	if (info == NULL)
 		return 0;
+        
+        lseek(fd, 0, SEEK_SET);
+	ret = read(fd, &tri_hdr, sizeof(tri_hdr));
+	
+	if (ret != sizeof(tri_hdr))
+	{	
+            printf("\r\ntrident file ret=%d",ret);
+            goto invalid_file;   
+	}
+        file_tri = 0;
+        for(int i=0; i<4;i++)
+	{
+	    if(tri_hdr.vendor_id[i]==tri_vend[i])
+	    {
+		file_tri++; /*trident*/ 
+	    } 
+	}		
 
-	info->type = hdr.type;
-	info->crc = le32toh(hdr.image_crc);
-	version_to_string(hdr.version, info->version, sizeof(info->version));
-	info->image_addr = le32toh(hdr.load_addr);
-	info->image_len = le32toh(hdr.image_len);
+        if(file_tri == 4)
+        {
+		info->type = (enum switchtec_fw_image_type)switch_convertu8tou32(tri_hdr.part_type,4);
+		info->crc = switch_convertu8tou32(tri_hdr.img_crc,4);	
+		ver_num = switch_convertu8tou32(tri_hdr.version,4);
+		version_to_string(ver_num, info->version, sizeof(info->version));
+		info->image_addr = (size_t)switch_convertu8tou32(tri_hdr.load_addr,4);
+		info->image_len = (size_t)switch_convertu8tou32(tri_hdr.img_length,4);	    
 
+	}
+	else
+	{
+            goto invalid_file;
+	}
 	return 0;
 
 invalid_file:
 	errno = ENOEXEC;
 	return -errno;
+
 }
 
 const char *switchtec_fw_image_type(const struct switchtec_fw_image_info *info)
