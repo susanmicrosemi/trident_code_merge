@@ -309,6 +309,28 @@ struct fw_image_header {
 	uint32_t image_crc;
 };
 
+
+unsigned long switch_convertu8tou32(UINT8 *p, int size)
+{
+    unsigned long tmp,data;
+    int i;
+
+    tmp=0;
+	data = 0;
+
+	if(size > 4)
+	{
+	    return -1;
+    }
+
+	for(i=0;i<size;i++)
+	{
+       tmp = p[i];
+	   data |= (tmp << (i*8));
+	}
+
+	return data;
+}
 int switchtec_fw_file_info(int fd, struct switchtec_fw_image_info *info)
 {
 	int ret;
@@ -380,12 +402,12 @@ static int get_part(struct switchtec_dev *dev,
 	return 0;
 }
 
-int switchtec_fw_part_info(struct switchtec_dev *dev, int nr_info,
+int switchtec_fw_part_info_tri(struct switchtec_dev *dev, int nr_info,
 			   struct switchtec_fw_image_info *info)
 {
 	int ret;
 	int i;
-	struct switchtec_fw_footer ftr;
+	struct fwdl_meta ftr;
 
 	if (info == NULL || nr_info == 0)
 		return -EINVAL;
@@ -394,6 +416,14 @@ int switchtec_fw_part_info(struct switchtec_dev *dev, int nr_info,
 		struct switchtec_fw_image_info *inf = &info[i];
 
 		switch(info[i].type) {
+	   case SWITCHTEC_FW_TYPE_BL20: 		   
+		   ret = get_part(dev, inf, SWITCHTEC_IOCTL_PART_BL20);
+	   
+		   break;
+	   case SWITCHTEC_FW_TYPE_BL21: 		   
+		   ret = get_part(dev, inf, SWITCHTEC_IOCTL_PART_BL21);
+		   
+		   break;
 		case SWITCHTEC_FW_TYPE_IMG0:
 			ret = get_part(dev, inf, SWITCHTEC_IOCTL_PART_IMG0);
 			break;
@@ -422,7 +452,7 @@ int switchtec_fw_part_info(struct switchtec_dev *dev, int nr_info,
 		if (ret)
 			return ret;
 
-		ret = switchtec_fw_read_footer(dev, inf->image_addr,
+		ret = switchtec_fw_read_meta(dev, inf->image_addr,
 					       inf->image_len, &ftr,
 					       inf->version,
 					       sizeof(inf->version));
@@ -430,7 +460,7 @@ int switchtec_fw_part_info(struct switchtec_dev *dev, int nr_info,
 			inf->version[0] = 0;
 			inf->crc = 0xFFFFFFFF;
 		} else {
-			inf->crc = ftr.image_crc;
+			inf->crc = ftr.img_crc;
 		}
 	}
 
@@ -509,7 +539,7 @@ int switchtec_fw_cfg_info(struct switchtec_dev *dev,
 	info[0].type = SWITCHTEC_FW_TYPE_DAT0;
 	info[1].type = SWITCHTEC_FW_TYPE_DAT1;
 
-	ret = switchtec_fw_part_info(dev, sizeof(info) / sizeof(*info),
+	ret = switchtec_fw_part_info_tri(dev, sizeof(info) / sizeof(*info),
 				     info);
 	if (ret < 0)
 		return ret;
@@ -542,10 +572,38 @@ int switchtec_fw_img_info(struct switchtec_dev *dev,
 	info[0].type = SWITCHTEC_FW_TYPE_IMG0;
 	info[1].type = SWITCHTEC_FW_TYPE_IMG1;
 
-	ret = switchtec_fw_part_info(dev, sizeof(info) / sizeof(*info),
-				     info);
+	ret = switchtec_fw_part_info_tri(dev, sizeof(info) / sizeof(*info),info);
 	if (ret < 0)
 		return ret;
+
+	if (switchtec_fw_active(&info[0])) {
+		if (act_img)
+			memcpy(act_img, &info[0], sizeof(*act_img));
+		if (inact_img)
+			memcpy(inact_img, &info[1], sizeof(*inact_img));
+	} else {
+		if (act_img)
+			memcpy(act_img, &info[1], sizeof(*act_img));
+		if (inact_img)
+			memcpy(inact_img, &info[0], sizeof(*inact_img));
+	}
+
+	return 0;
+}
+int switchtec_bl2_img_info(struct switchtec_dev *dev,
+				struct switchtec_fw_image_info *act_img,
+				struct switchtec_fw_image_info *inact_img)
+{
+    int ret;
+    struct switchtec_fw_image_info info[2];
+
+    info[0].type = SWITCHTEC_FW_TYPE_BL20;
+    info[1].type = SWITCHTEC_FW_TYPE_BL21;
+
+    ret = switchtec_fw_part_info_tri(dev, sizeof(info) / sizeof(*info), info);
+
+    if (ret < 0)
+	{     return ret;    }
 
 	if (switchtec_fw_active(&info[0])) {
 		if (act_img)
@@ -663,21 +721,47 @@ int switchtec_fw_read_footer(struct switchtec_dev *dev,
 
 	return 0;
 }
-
-int switchtec_fw_img_write_hdr(int fd, struct switchtec_fw_footer *ftr,
-			       enum switchtec_fw_image_type type)
+int switchtec_fw_read_meta(struct switchtec_dev *dev,
+				  unsigned long partition_start,
+				  size_t partition_len,
+				  struct fwdl_meta *ftr,
+				  char *version, size_t version_len)
 {
-	struct fw_image_header hdr = {};
+    int ret;
+    //UINT8 vend[5]={'M','S','C','C'};
 
-	memcpy(hdr.magic, ftr->magic, sizeof(hdr.magic));
-	hdr.image_len = ftr->image_len;
-	hdr.type = type;
-	hdr.load_addr = ftr->load_addr;
-	hdr.version = ftr->version;
-	hdr.header_crc = ftr->header_crc;
-	hdr.image_crc = ftr->image_crc;
+    unsigned long addr = partition_start + partition_len - sizeof(struct fwdl_meta);
 
-	return write(fd, &hdr, sizeof(hdr));
+	if (!ftr)
+	{	return -EINVAL;   }
+    
+    ret = switchtec_fw_read(dev, addr, sizeof(struct fwdl_meta),ftr);
+    if (ret < 0)
+	{   return ret; }
+
+
+
+    if (version)
+	{    version_to_string(ftr->version, version, version_len);  }
+
+    return 0;
+}
+int switchtec_fw_img_write_hdr_tri(int fd, struct fwdl_meta *ftr,
+				  enum switchtec_fw_image_type type)
+{
+   enum switchtec_fw_image_type imgtype;
+   struct fwdl_file_hdr_struct tri_hdr = {};
+   
+   imgtype = type;
+   memcpy(tri_hdr.vendor_id, ftr->vendor_id, sizeof(tri_hdr.vendor_id));
+   memcpy(tri_hdr.img_length,&(ftr->img_length), sizeof(tri_hdr.img_length));
+   memcpy(tri_hdr.part_type,&imgtype, sizeof(tri_hdr.part_type));
+   memcpy(tri_hdr.load_addr,&(ftr->load_addr), sizeof(tri_hdr.load_addr));
+   memcpy(tri_hdr.version,&(ftr->version), sizeof(tri_hdr.version));
+   memcpy(tri_hdr.hdr_crc,&(ftr->hdr_crc), sizeof(tri_hdr.hdr_crc));
+   memcpy(tri_hdr.img_crc,&(ftr->img_crc), sizeof(tri_hdr.img_crc));
+
+   return write(fd, &tri_hdr, sizeof(tri_hdr));
 }
 
 struct switchtec_boot_ro {

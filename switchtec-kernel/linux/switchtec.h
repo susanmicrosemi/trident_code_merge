@@ -20,6 +20,10 @@
 #include <linux/cdev.h>
 #include <linux/notifier.h>
 
+typedef unsigned char UINT8;
+typedef unsigned int UINT32;
+
+
 #define MICROSEMI_VENDOR_ID         0x11f8
 #define MICROSEMI_NTB_CLASSCODE     0x068000
 #define MICROSEMI_MGMT_CLASSCODE    0x058000
@@ -107,11 +111,19 @@ struct sw_event_regs {
 } __packed;
 
 enum {
-	SWITCHTEC_CFG0_RUNNING = 0x04,
-	SWITCHTEC_CFG1_RUNNING = 0x05,
-	SWITCHTEC_IMG0_RUNNING = 0x03,
-	SWITCHTEC_IMG1_RUNNING = 0x07,
+	SWITCHTEC_BL20_RUNNING = 0x01,	/*Trident add BL2 */
+	SWITCHTEC_BL21_RUNNING = 0x02,
+	SWITCHTEC_MAP1_RUNNING = 0x03,
+	SWITCHTEC_MAP0_RUNNING = 0x04,
+	SWITCHTEC_CFG0_RUNNING = 0x05,
+	SWITCHTEC_CFG1_RUNNING = 0x06,
+	SWITCHTEC_IMG0_RUNNING = 0x07,
+	SWITCHTEC_IMG1_RUNNING = 0x08,
 };
+struct partition_info{
+	u32 address;
+	u32 length;
+};  /*GAS offset: 0x220C */
 
 struct sys_info_regs {
 	u32 device_id;
@@ -122,9 +134,12 @@ struct sys_info_regs {
 	u32 table_format_version;
 	u32 partition_id;
 	u32 cfg_file_fmt_version;
-	u16 cfg_running;
-	u16 img_running;
-	u32 reserved2[57];
+	u16 bl2_running;  /* GAS offset: 0x2020 */
+	u16 cfg_running;  /* GAS offset: 0x2022 */
+	u16 fw_running;   /* GAS offset: 0x2024 */
+	u16 reserved;
+	u32 reserved2[56];
+	
 	char vendor_id[8];
 	char product_id[16];
 	char product_revision[4];
@@ -136,28 +151,22 @@ struct sys_info_regs {
 struct flash_info_regs {
 	u32 flash_part_map_upd_idx;
 
-	struct active_partition_info {
-		u32 address;
-		u32 build_version;
-		u32 build_string;
-	} active_img;
+	struct active_partition_info_tri { /*GAS offset: 0x2204 */
+		UINT8 active_bl2_flag;
+		UINT8 active_config_flag;
+		UINT8 active_mainfw_flag;
+		UINT8 reserved;
+	} active_flag;  
 
-	struct active_partition_info active_cfg;
-	struct active_partition_info inactive_img;
-	struct active_partition_info inactive_cfg;
-
+	/*GAS offset: 0x2208 */
 	u32 flash_length;
 
-	struct partition_info {
-		u32 address;
-		u32 length;
-	} cfg0;
-
-	struct partition_info cfg1;
-	struct partition_info img0;
-	struct partition_info img1;
-	struct partition_info nvlog;
-	struct partition_info vendor[8];
+        struct partition_info cfg0;
+	struct partition_info cfg1; /*GAS offset: 0x2214 */
+	struct partition_info img0; /*GAS offset: 0x221C */
+	struct partition_info img1; /*GAS offset: 0x2224 */
+	struct partition_info nvlog; /*GAS offset: 0x222C */
+	struct partition_info vendor[8]; /*GAS offset: 0x2234 */
 };
 
 enum {
